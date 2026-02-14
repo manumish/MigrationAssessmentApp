@@ -1,0 +1,16 @@
+[Unit]
+Description=Migration Assessment Chat API (Grok 4 via OCI GenAI)
+After=network.target
+
+[Service]
+Type=simple
+User=opc
+WorkingDirectory=/home/opc
+EnvironmentFile=/home/opc/.env
+Environment=PATH=/home/opc/venv/bin:/usr/local/bin:/usr/bin
+ExecStart=/home/opc/venv/bin/python3 /home/opc/chat_api.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

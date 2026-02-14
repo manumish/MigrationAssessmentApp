@@ -1,0 +1,10 @@
+.env
+__pycache__/
+*.pyc
+venv/
+wallet_*/
+*.pem
+*.key
+node_modules/
+.DS_Store
+*.log

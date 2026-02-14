@@ -1,0 +1,791 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>MyOrg OCI Migration Dashboard</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prop-types/15.8.1/prop-types.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/recharts/2.7.2/Recharts.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet"/>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#0B0E14;color:#E8ECF1;font-family:'DM Sans','Segoe UI',system-ui,sans-serif}
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-track{background:#141820}
+::-webkit-scrollbar-thumb{background:#2A3040;border-radius:3px}
+input,select,textarea{font-family:inherit}
+.login-wrap{display:flex;align-items:center;justify-content:center;height:100vh;background:#0B0E14}
+.login-box{background:#1A1F2B;border:1px solid #2A3040;border-radius:12px;padding:40px;width:360px;text-align:center}
+.login-box h2{color:#4A9EFF;margin-bottom:8px;font-size:20px}
+.login-box p{color:#5C6678;font-size:12px;margin-bottom:24px}
+.login-box input{width:100%;padding:10px 14px;background:#0B0E14;border:1px solid #2A3040;border-radius:8px;color:#E8ECF1;font-size:14px;margin-bottom:16px;outline:none}
+.login-box input:focus{border-color:#4A9EFF}
+.login-box button{width:100%;padding:10px;background:#4A9EFF;border:none;border-radius:8px;color:#fff;font-size:14px;font-weight:700;cursor:pointer}
+.login-box button:hover{background:#3A8EEF}
+.login-err{color:#F87171;font-size:12px;margin-bottom:12px}
+@keyframes pulse{0%,100%{opacity:.3;transform:scale(0.8)}50%{opacity:1;transform:scale(1.2)}}
+</style>
+</head>
+<body>
+<div id="root"><div style="display:flex;align-items:center;justify-content:center;height:100vh;font-size:18px;color:#4A9EFF">Loading...</div></div>
+<script type="text/javascript">
+var h=React.createElement,useState=React.useState,useMemo=React.useMemo,useCallback=React.useCallback,useEffect=React.useEffect;
+var RC=Recharts||{};
+var PieChart=RC.PieChart,Pie=RC.Pie,Cell=RC.Cell,BarChart=RC.BarChart,Bar=RC.Bar,XAxis=RC.XAxis,YAxis=RC.YAxis,RTooltip=RC.Tooltip,RContainer=RC.ResponsiveContainer,LineChart=RC.LineChart,Line=RC.Line,Legend=RC.Legend,CartesianGrid=RC.CartesianGrid;
+
+var T={bg:"#0B0E14",sf:"#141820",cd:"#1A1F2B",ch:"#1E2536",bd:"#2A3040",tx:"#E8ECF1",tm:"#9AA3B4",td:"#5C6678",ac:"#4A9EFF",gn:"#34D399",rd:"#F87171",am:"#FBBF24",pu:"#A78BFA",cy:"#22D3EE"};
+var TC={"OCI-Native":T.ac,"OCVS":T.pu,"Stay-OnPrem":T.am};
+var WC={1:T.gn,2:T.ac,3:T.pu};
+var tts={background:T.cd,border:"1px solid "+T.bd,borderRadius:8,color:T.tx,fontSize:11};
+var AUTH_HASH="MigrateNow2026!";
+
+// === Cost calculator: uses Matilda TCO analysis actuals ===
+// Matilda baseline: OnPrem $2.29M/yr, OCI Optimized $899K/yr = 60.66% savings
+// Per-VM basis: 806 VMs, $2.29M/yr = ~$2,836/yr per VM on-prem = ~$236/mo per VM
+// OCI Optimized: $899K/yr ÷ 806 = ~$1,115/yr per VM = ~$93/mo per VM (0.393x)
+// OCVS estimate: ~0.55x on-prem (higher than native due to VMware overlay)
+// Matilda breakdown: Compute $773K + MySQL $4.3K + MongoDB $9.5K + Oracle $24.5K + Storage $88K
+function gc(a){
+  if(!a.vms)return{c:0,on:0,ov:0};
+  var vms=a.vms||1;
+  // On-prem cost: $236/mo per VM base + scale by CPU/mem intensity
+  var cpuFactor=Math.max((a.cpu||2)/4, 0.5); // normalize to 4-vCPU baseline
+  var memFactor=Math.max((a.mem||8)/16, 0.5); // normalize to 16GB baseline
+  var intensity=(cpuFactor + memFactor) / 2;
+  var curr=Math.round(vms * 236 * intensity);
+  // OCI-Native optimized: 39.3% of on-prem (Matilda: $899K/$2.29M)
+  var ocin=Math.round(curr * 0.393);
+  // OCVS: ~55% of on-prem (VMware overlay adds ~15% over native)
+  var ocvs=Math.round(curr * 0.55);
+  return{c:curr,on:ocin,ov:ocvs};
+}
+
+// === Login Component ===
+function LoginScreen(props){
+  var _p=useState(""),pw=_p[0],sP=_p[1];
+  var _e=useState(""),err=_e[0],sE=_e[1];
+  function submit(){
+    if(pw===AUTH_HASH){props.onLogin();sE("")}
+    else{sE("Invalid password")}
+  }
+  function kd(e){if(e.key==="Enter")submit()}
+  return h("div",{className:"login-wrap"},
+    h("div",{className:"login-box"},
+      h("div",{style:{fontSize:36,marginBottom:12}},"⚕"),
+      h("h2",null,"MyOrg Migration"),
+      h("p",null,"OCI Cloud Migration Dashboard — Authorized Access Only"),
+      err&&h("div",{className:"login-err"},err),
+      h("input",{type:"password",placeholder:"Enter password",value:pw,onChange:function(e){sP(e.target.value)},onKeyDown:kd,autoFocus:true}),
+      h("button",{onClick:submit},"Sign In")));
+}
+
+// === Reusable UI components ===
+function Pill(props){var c=props.color||T.ac;return h("span",{onClick:props.onClick,style:{display:"inline-block",padding:"2px 8px",borderRadius:10,background:c+"22",color:c,fontSize:11,fontWeight:600,cursor:props.onClick?"pointer":"default",border:"1px solid "+c+"33"}},props.children)}
+
+function Cd(props){return h("div",{style:Object.assign({background:T.cd,borderRadius:10,border:"1px solid "+T.bd,padding:18},props.s||{})},props.children)}
+
+function Hdr(props){return h("div",{style:{marginBottom:12}},h("div",{style:{fontSize:14,fontWeight:700,color:T.tx}},props.children),props.sub&&h("div",{style:{fontSize:11,color:T.td,marginTop:2}},props.sub))}
+
+function ProgBar(props){var ht=props.h||6;return h("div",{style:{background:T.bd,borderRadius:ht,height:ht,overflow:"hidden"}},h("div",{style:{width:Math.min(props.p,100)+"%",height:"100%",background:props.c,borderRadius:ht}}))}
+
+function KpiCard(props){
+  var c=props.color||T.ac;
+  return h("div",{onClick:props.onClick,style:{background:props.active?c+"18":T.cd,borderRadius:10,padding:"16px 18px",cursor:props.onClick?"pointer":"default",border:"1px solid "+(props.active?c+"55":T.bd),transition:"all 0.2s",position:"relative"},
+    onMouseEnter:function(e){if(props.onClick){e.currentTarget.style.borderColor=c+"66";e.currentTarget.style.transform="translateY(-1px)"}},
+    onMouseLeave:function(e){if(props.onClick){e.currentTarget.style.borderColor=props.active?c+"55":T.bd;e.currentTarget.style.transform="none"}}},
+    h("div",{style:{fontSize:11,color:T.td,fontWeight:500,marginBottom:4,textTransform:"uppercase",letterSpacing:"0.5px"}},(props.icon?props.icon+" ":"")+props.label),
+    h("div",{style:{fontSize:28,fontWeight:800,color:T.tx,lineHeight:1.1}},props.value),
+    props.sub&&h("div",{style:{fontSize:11,color:T.tm,marginTop:4}},props.sub),
+    props.onClick&&h("div",{style:{position:"absolute",top:8,right:10,fontSize:10,color:c,opacity:.6}},"▸ click"));
+}
+
+// === VM Detail Modal - shows real VM names, IPs, clusters ===
+function VmModal(props){
+  if(!props.vms||!props.vms.length)return null;
+  var vms=props.vms;
+  var _f=useState(""),filt=_f[0],sF=_f[1];
+  var shown=filt?vms.filter(function(v){var s=filt.toLowerCase();return(v.VM_NAME||"").toLowerCase().indexOf(s)>=0||(v.CLUSTER_NAME||"").toLowerCase().indexOf(s)>=0||(v.PRIMARY_IP||"").toLowerCase().indexOf(s)>=0||(v.APPLICATION||"").toLowerCase().indexOf(s)>=0}):vms;
+  var onCnt=shown.filter(function(v){return v.POWERSTATE==="poweredOn"}).length;
+  var offCnt=shown.length-onCnt;
+  var clusters={};shown.forEach(function(v){var c=v.CLUSTER_NAME||"Unknown";if(!clusters[c])clusters[c]=0;clusters[c]++});
+  return h("div",{style:{position:"fixed",top:0,left:0,right:0,bottom:0,zIndex:2000,display:"flex",alignItems:"center",justifyContent:"center"}},
+    h("div",{onClick:props.onClose,style:{position:"absolute",top:0,left:0,right:0,bottom:0,background:"rgba(0,0,0,.65)"}}),
+    h("div",{style:{position:"relative",background:T.sf,border:"1px solid "+T.bd,borderRadius:12,width:900,maxHeight:"85vh",overflow:"hidden",display:"flex",flexDirection:"column"}},
+      // Header
+      h("div",{style:{padding:"16px 20px",borderBottom:"1px solid "+T.bd,display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}},
+        h("div",null,
+          h("div",{style:{fontSize:16,fontWeight:800,color:T.tx}},props.title||"Virtual Machines"),
+          h("div",{style:{fontSize:12,color:T.tm,marginTop:2}},shown.length+" VMs shown — "+onCnt+" on, "+offCnt+" off")),
+        h("button",{onClick:props.onClose,style:{background:T.cd,border:"1px solid "+T.bd,borderRadius:6,color:T.tx,padding:"6px 12px",cursor:"pointer",fontSize:14}},"✕")),
+      // Cluster summary pills
+      h("div",{style:{padding:"8px 20px",display:"flex",gap:6,flexWrap:"wrap",borderBottom:"1px solid "+T.bd,flexShrink:0}},
+        Object.entries(clusters).sort(function(a,b){return b[1]-a[1]}).map(function(e){return h(Pill,{key:e[0],color:T.cy},e[0]+": "+e[1])})),
+      // Search
+      h("div",{style:{padding:"8px 20px",flexShrink:0}},
+        h("input",{value:filt,onChange:function(e){sF(e.target.value)},placeholder:"🔍 Filter by VM name, IP, cluster, app...",style:{width:"100%",background:T.bg,color:T.tx,border:"1px solid "+T.bd,borderRadius:6,padding:"8px 12px",fontSize:12,outline:"none"}})),
+      // Table
+      h("div",{style:{overflow:"auto",flex:1,padding:"0 20px 16px"}},
+        h("table",{style:{width:"100%",borderCollapse:"collapse",fontSize:11}},
+          h("thead",null,h("tr",{style:{borderBottom:"2px solid "+T.bd}},
+            ["VM Name","Power","IP Address","Cluster","Host","OS","CPUs","Mem MB","Disk MiB","App"].map(function(col){
+              return h("th",{key:col,style:{textAlign:"left",padding:"6px 8px",color:T.td,fontSize:10,fontWeight:600,textTransform:"uppercase",position:"sticky",top:0,background:T.sf}},col)}))),
+          h("tbody",null,shown.map(function(v,i){
+            var isOn=v.POWERSTATE==="poweredOn";
+            return h("tr",{key:i,style:{borderBottom:"1px solid "+T.bd+"08"},
+              onMouseEnter:function(e){e.currentTarget.style.background=T.ch},onMouseLeave:function(e){e.currentTarget.style.background="transparent"}},
+              h("td",{style:{padding:"6px 8px",color:T.tx,fontWeight:500}},v.VM_NAME),
+              h("td",{style:{padding:"6px 8px"}},h("span",{style:{display:"inline-block",width:8,height:8,borderRadius:4,background:isOn?T.gn:T.rd,marginRight:4}}),isOn?"On":"Off"),
+              h("td",{style:{padding:"6px 8px",color:T.cy,fontFamily:"monospace",fontSize:11}},v.PRIMARY_IP||"—"),
+              h("td",{style:{padding:"6px 8px",color:T.tm}},v.CLUSTER_NAME||"—"),
+              h("td",{style:{padding:"6px 8px",color:T.td,fontSize:10}},v.HOST_NAME?v.HOST_NAME.split(".")[0]:"—"),
+              h("td",{style:{padding:"6px 8px",color:T.td,fontSize:10,maxWidth:140,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},v.OS_CONFIG||"—"),
+              h("td",{style:{padding:"6px 8px",color:T.tm}},v.CPUS||"—"),
+              h("td",{style:{padding:"6px 8px",color:T.tm}},v.MEMORY_MB?Math.round(v.MEMORY_MB/1024)+"G":"—"),
+              h("td",{style:{padding:"6px 8px",color:T.tm}},v.TOTAL_DISK_MIB?Math.round(v.TOTAL_DISK_MIB/1024)+"G":"—"),
+              h("td",{style:{padding:"6px 8px",color:T.ac,fontSize:10}},v.APPLICATION||"—"))})))))
+  );
+}
+
+// === App Detail Drawer with admin override ===
+function AppDrawer(props){
+  var app=props.app,ov=props.ov,oF=props.oF,allVMs=props.allVMs;
+  if(!app)return null;
+  var o=ov[app.id]||{};
+  var costs=gc(app);
+  // Get VMs belonging to this app
+  var appVMs=(allVMs||[]).filter(function(v){return v.APPLICATION&&app.n&&v.APPLICATION.toLowerCase().indexOf(app.n.toLowerCase().split(" ")[0].toLowerCase())>=0});
+
+  return h("div",{style:{position:"fixed",top:0,right:0,bottom:0,width:480,background:T.sf,borderLeft:"2px solid "+T.bd,zIndex:1000,overflow:"auto",padding:24,boxShadow:"-8px 0 32px rgba(0,0,0,.5)"}},
+    h("div",{style:{display:"flex",justifyContent:"space-between",marginBottom:20}},
+      h("div",null,
+        h("div",{style:{fontSize:18,fontWeight:800,color:T.tx}},app.n),
+        h("div",{style:{fontSize:12,color:T.tm,marginTop:2}},app.v+" · "+app.cat)),
+      h("button",{onClick:props.onClose,style:{background:T.cd,border:"1px solid "+T.bd,borderRadius:6,color:T.tx,padding:"4px 10px",cursor:"pointer",fontSize:14}},"✕")),
+    // Pills
+    h("div",{style:{display:"flex",gap:8,flexWrap:"wrap",marginBottom:16}},
+      h(Pill,{color:TC[app.tgt]||T.td},app.tgt||"Unassigned"),
+      h(Pill,{color:T.tx},app.cr||"Medium"),
+      app.w&&h(Pill,{color:WC[app.w]},"Wave "+app.w),
+      app.ov&&h(Pill,{color:T.am},"⚡ OVERRIDDEN")),
+    // Rationale
+    h(Cd,{s:{marginBottom:16}},
+      h(Hdr,null,"Migration Rationale"),
+      h("div",{style:{fontSize:12,color:T.tm,lineHeight:1.6}},app.nt||"No notes")),
+    // Infrastructure
+    app.vms>0&&h(Cd,{s:{marginBottom:16}},
+      h(Hdr,null,"Infrastructure"),
+      h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:10}},
+        [["VMs",app.vms,T.ac],["vCPUs",app.cpu||"—",T.cy],["Mem",(app.mem||0)+"GB",T.gn],["Disk",(app.disk||0)+"TB",T.pu]].map(function(m,i){
+          return h("div",{key:i,style:{textAlign:"center",padding:8,background:T.bg,borderRadius:6}},
+            h("div",{style:{fontSize:18,fontWeight:700,color:m[2]}},m[1]),
+            h("div",{style:{fontSize:10,color:T.td}},m[0]))}))),
+    // COST: show On-Prem, OCI-Native, AND OCVS side by side
+    h(Cd,{s:{marginBottom:16}},
+      h(Hdr,{sub:"Compare all options"},"Monthly Cost Projection"),
+      h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10}},
+        [["Current (VMware)",costs.c,T.rd],["OCI-Native",costs.on,T.ac],["OCVS",costs.ov,T.pu]].map(function(m,i){
+          var sav=costs.c-m[1];
+          return h("div",{key:i,style:{textAlign:"center",padding:12,background:m[2]+"12",borderRadius:8,border:"1px solid "+m[2]+"33"}},
+            h("div",{style:{fontSize:10,color:T.td,marginBottom:4}},m[0]),
+            h("div",{style:{fontSize:18,fontWeight:700,color:m[2]}},"$"+(m[1]||0).toLocaleString()),
+            i>0&&h("div",{style:{fontSize:10,color:sav>0?T.gn:T.rd,marginTop:4}},sav>0?"Save $"+sav.toLocaleString()+"/mo":"+"+"$"+Math.abs(sav).toLocaleString()+"/mo"))}))),
+    // Migration details
+    h(Cd,{s:{marginBottom:16}},
+      h(Hdr,null,"Migration Details"),
+      [["Service",app.svc||"—",T.tx],["Complexity",app.cx||"—",app.cx==="High"?T.rd:app.cx==="Medium"?T.am:T.gn],["Risk",app.rk||"—",app.rk==="Critical"?T.rd:app.rk==="High"?T.am:T.gn],["Est. Days",app.dy||"TBD",T.tx]].map(function(m,i){
+        return h("div",{key:i,style:{display:"flex",justifyContent:"space-between",padding:"6px 0",borderBottom:i<3?"1px solid "+T.bd:"none",fontSize:12,color:T.tm}},
+          h("span",null,m[0]),h("span",{style:{color:m[2],fontWeight:600}},m[1]))})),
+    // VMs for this app
+    appVMs.length>0&&h(Cd,{s:{marginBottom:16}},
+      h(Hdr,{sub:appVMs.length+" VMs found"},"Associated VMs"),
+      h("div",{style:{maxHeight:150,overflow:"auto"}},
+        appVMs.map(function(v,i){
+          var isOn=v.POWERSTATE==="poweredOn";
+          return h("div",{key:i,style:{display:"flex",gap:8,padding:"4px 0",borderBottom:"1px solid "+T.bd+"08",fontSize:11}},
+            h("span",{style:{display:"inline-block",width:6,height:6,borderRadius:3,background:isOn?T.gn:T.rd,marginTop:4}}),
+            h("span",{style:{color:T.tx,fontWeight:500,width:120}},v.VM_NAME),
+            h("span",{style:{color:T.cy,fontFamily:"monospace",width:100}},v.PRIMARY_IP||"—"),
+            h("span",{style:{color:T.tm}},v.CLUSTER_NAME||"—"))}))),
+    // ADMIN OVERRIDE
+    h(Cd,{s:{border:"1px solid "+T.am+"33"}},
+      h(Hdr,{sub:"Change target, wave, or add notes"},"⚡ Admin Override"),
+      h("div",{style:{marginBottom:12}},
+        h("label",{style:{fontSize:11,color:T.td,display:"block",marginBottom:4}},"Migration Target"),
+        h("select",{value:o.tgt||app.tgt||"",onChange:function(e){oF(app.id,"tgt",e.target.value)},style:{width:"100%",background:T.bg,color:T.tx,border:"1px solid "+T.bd,borderRadius:6,padding:"6px 10px",fontSize:12,outline:"none"}},
+          h("option",{value:"OCI-Native"},"OCI-Native"),
+          h("option",{value:"OCVS"},"OCVS (VMware Solution)"),
+          h("option",{value:"Stay-OnPrem"},"Stay On-Premises"),
+          h("option",{value:""},"Unassigned"))),
+      h("div",{style:{marginBottom:12}},
+        h("label",{style:{fontSize:11,color:T.td,display:"block",marginBottom:4}},"Migration Wave"),
+        h("select",{value:o.w!==undefined?o.w:(app.w||""),onChange:function(e){oF(app.id,"w",e.target.value===""?null:parseInt(e.target.value))},style:{width:"100%",background:T.bg,color:T.tx,border:"1px solid "+T.bd,borderRadius:6,padding:"6px 10px",fontSize:12,outline:"none"}},
+          h("option",{value:1},"Wave 1 — Quick Wins"),
+          h("option",{value:2},"Wave 2 — Core Systems"),
+          h("option",{value:3},"Wave 3 — Complex/OCVS"),
+          h("option",{value:""},"Unassigned"))),
+      h("textarea",{value:o.nt||"",onChange:function(e){oF(app.id,"nt",e.target.value)},placeholder:"Override reason...",style:{width:"100%",background:T.bg,color:T.tx,border:"1px solid "+T.bd,borderRadius:6,padding:8,fontSize:12,minHeight:60,resize:"vertical",outline:"none"}}),
+      app.ov&&h("div",{style:{marginTop:10,padding:8,background:T.am+"12",borderRadius:6,fontSize:11,color:T.am}},"⚡ Overridden from AI recommendation"))
+  );
+}
+
+// === MAIN DASHBOARD ===
+function Dashboard(props){
+  var _t=useState("overview"),tab=_t[0],sT=_t[1];
+  var _d=useState(null),dd=_d[0],sD=_d[1];
+  var _s=useState(null),sel=_s[0],sS=_s[1];
+  var _o=useState({}),ov=_o[0],sO=_o[1];
+  var _r=useState(""),sr=_r[0],sR=_r[1];
+  var _p=useState("phases"),pv=_p[0],sP=_p[1];
+  var _vm=useState(false),showVM=_vm[0],sVM=_vm[1];
+  var _ld=useState(true),loading=_ld[0],sLd=_ld[1];
+  var _raw=useState({vms:[],mp:[],apps:[]}),raw=_raw[0],sRaw=_raw[1];
+
+  // Load data from API
+  useEffect(function(){
+    Promise.all([
+      fetch("/data/inventory_vms.json").then(function(r){return r.json()}),
+      fetch("/data/migration_plan.json").then(function(r){return r.json()}),
+      fetch("/data/app_inventory.json").then(function(r){return r.json()})
+    ]).then(function(d){
+      sRaw({vms:d[0],mp:d[1],apps:d[2]});
+      sLd(false);
+    }).catch(function(e){console.error("Load error",e);sLd(false)});
+  },[]);
+
+  // Build app list from migration plan (real data)
+  var baseApps=useMemo(function(){
+    return raw.mp.map(function(m,i){
+      var costs=gc({vms:m.VM_COUNT||0,cpu:m.TOTAL_CPUS||0,mem:m.TOTAL_MEM_GB||0,disk:m.TOTAL_DISK_TB||0});
+      // Find matching AC_APPLICATION entry for vendor info
+      var acApp=raw.apps.find(function(a){return a.APP_NAME&&m.APPLICATION&&a.APP_NAME.toLowerCase().indexOf(m.APPLICATION.toLowerCase().split(" ")[0])>=0});
+      return{
+        id:i,n:m.APPLICATION||"Unknown",v:acApp?acApp.VENDOR||"":"",
+        cat:m.APP_CATEGORY||"Other",cr:m.RISK_LEVEL||"Medium",
+        svc:m.TARGET_SERVICE||"",tgt:m.MIGRATION_TARGET||"",
+        w:m.MIGRATION_WAVE,vms:m.VM_COUNT||0,
+        cpu:m.TOTAL_CPUS||0,mem:m.TOTAL_MEM_GB||0,disk:m.TOTAL_DISK_TB||0,
+        cx:m.COMPLEXITY||"",rk:m.RISK_LEVEL||"",
+        dy:m.ESTIMATED_DAYS||0,nt:m.NOTES||"",
+        $c:costs.c,$on:costs.on,$ov:costs.ov
+      };
+    });
+  },[raw.mp,raw.apps]);
+
+  // Apply overrides + recalculate costs based on effective target
+  var ef=useMemo(function(){
+    return baseApps.map(function(a){
+      var o=ov[a.id];
+      if(!o)return Object.assign({},a,{$s:a.tgt==="OCI-Native"?a.$c-a.$on:a.tgt==="OCVS"?a.$c-a.$ov:0});
+      var na=Object.assign({},a,{tgt:o.tgt||a.tgt,w:o.w!==undefined?o.w:a.w,ov:true,ovN:o.nt});
+      var costs=gc({vms:na.vms,cpu:na.cpu,mem:na.mem,disk:na.disk});
+      na.$c=costs.c;na.$on=costs.on;na.$ov=costs.ov;
+      na.$s=na.tgt==="OCI-Native"?na.$c-na.$on:na.tgt==="OCVS"?na.$c-na.$ov:0;
+      return na;
+    });
+  },[baseApps,ov]);
+
+  // Compute savings for non-overridden apps too
+  var efWithSavings=useMemo(function(){
+    return ef.map(function(a){
+      if(a.$s!==undefined)return a;
+      return Object.assign({},a,{$s:a.tgt==="OCI-Native"?a.$c-a.$on:a.tgt==="OCVS"?a.$c-a.$ov:0});
+    });
+  },[ef]);
+
+  // Aggregates
+  var ag=useMemo(function(){
+    var bt={},bw={},ts=0,tc=0,to=0,oc=0;
+    efWithSavings.forEach(function(a){
+      var t=a.tgt||"Unassigned";if(!bt[t])bt[t]={a:0,v:0,s:0};bt[t].a++;bt[t].v+=a.vms||0;bt[t].s+=a.$s||0;
+      var w=a.w||"N/A";if(!bw[w])bw[w]={a:0,v:0};bw[w].a++;bw[w].v+=a.vms||0;
+      ts+=a.$s||0;tc+=a.$c||0;
+      to+=a.tgt==="OCI-Native"?a.$on:a.tgt==="OCVS"?a.$ov:a.$c;
+      if(a.ov)oc++;
+    });return{bt:bt,bw:bw,ts:ts,tc:tc,to:to,oc:oc};
+  },[efWithSavings]);
+
+  // Filtered list
+  var fl=useMemo(function(){
+    var l=efWithSavings;
+    if(dd){if(dd.t==="tgt")l=l.filter(function(a){return(a.tgt||"Unassigned")===dd.v});if(dd.t==="cat")l=l.filter(function(a){return a.cat===dd.v});if(dd.t==="w")l=l.filter(function(a){return a.w===dd.v})}
+    if(sr){var s=sr.toLowerCase();l=l.filter(function(a){return a.n.toLowerCase().indexOf(s)>=0||a.cat.toLowerCase().indexOf(s)>=0||(a.v||"").toLowerCase().indexOf(s)>=0})}
+    return l;
+  },[efWithSavings,dd,sr]);
+
+  function oF(id,f,v){sO(function(p){var n=Object.assign({},p);n[id]=Object.assign({},n[id]||{});n[id][f]=v;return n})}
+  function clr(){sO({})}
+
+  var tD=Object.entries(ag.bt).map(function(e){return{name:e[0],value:e[1].a,vms:e[1].v}});
+  var as=Math.round(ag.ts*12/1000);
+  var wvs=[{w:1,l:"Quick Wins",t:"Q2-Q3 2026",c:T.gn,g:"Build cloud confidence. Low-risk, high-impact first.",cr:"Web apps, analytics, infra, no device deps"},
+    {w:2,l:"Core Systems",t:"Q4 2026",c:T.ac,g:"Revenue cycle, patient engagement, security.",cr:"Medium complexity, web-based, HIPAA cloud hosting"},
+    {w:3,l:"Complex & OCVS",t:"Q1 2027",c:T.pu,g:"VMware-dependent workloads to OCVS. Complex integrations.",cr:"High complexity, VMware deps, device integrations"}];
+
+  // Cluster data from real VMs
+  var clusterData=useMemo(function(){
+    var cl={};raw.vms.forEach(function(v){var c=v.CLUSTER_NAME||"Unknown";if(!cl[c])cl[c]=0;cl[c]++});
+    return Object.entries(cl).map(function(e){return{n:e[0],v:e[1]}}).sort(function(a,b){return b.v-a.v});
+  },[raw.vms]);
+
+  var osData=useMemo(function(){
+    var os={};raw.vms.forEach(function(v){
+      var o=v.OS_CONFIG||"Unknown";
+      var k=o.indexOf("2016")>=0||o.indexOf("2019")>=0||o.indexOf("2022")>=0?"Win 2016+":o.indexOf("2012")>=0?"Win 2012":o.indexOf("2008")>=0?"Win 2008R2":o.indexOf("2003")>=0?"Win 2003":o.indexOf("Red Hat")>=0||o.indexOf("RHEL")>=0?"RHEL":o.indexOf("SUSE")>=0?"SUSE":o.indexOf("Ubuntu")>=0?"Ubuntu":o.indexOf("Windows 10")>=0||o.indexOf("Windows 8")>=0?"Win 8/10":"Other";
+      if(!os[k])os[k]=0;os[k]++;
+    });return Object.entries(os).map(function(e){return{n:e[0],v:e[1]}}).sort(function(a,b){return b.v-a.v});
+  },[raw.vms]);
+
+  if(loading)return h("div",{style:{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",color:T.ac,fontSize:16}},"Loading data from ADB...");
+
+  // Table helpers
+  function AppRow(a){
+    return h("tr",{onClick:function(){sS(a)},style:{cursor:"pointer",borderBottom:"1px solid "+T.bd+"08",background:a.ov?T.am+"08":"transparent"},
+      onMouseEnter:function(e){e.currentTarget.style.background=T.ch},onMouseLeave:function(e){e.currentTarget.style.background=a.ov?T.am+"08":"transparent"}},
+      h("td",{style:{padding:"8px",color:T.tx,fontWeight:500}},a.n,a.ov?" ⚡":""),
+      h("td",{style:{padding:"8px",color:T.tm,fontSize:10}},a.cat),
+      h("td",{style:{padding:"8px"}},h(Pill,{color:TC[a.tgt]||T.td},a.tgt||"—")),
+      h("td",{style:{padding:"8px",color:WC[a.w]||T.td,fontWeight:600}},a.w?"W"+a.w:"—"),
+      h("td",{style:{padding:"8px",color:T.tm}},a.vms||"—"),
+      h("td",{style:{padding:"8px",color:a.$s>0?T.gn:T.td}},a.$s>0?"$"+a.$s.toLocaleString():"—"),
+      h("td",{style:{padding:"8px",color:T.td,maxWidth:160,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",fontSize:10}},a.nt),
+      h("td",{style:{padding:"8px",color:T.ac}},"▸"));
+  }
+  function TblH(cols){
+    return h("thead",null,h("tr",{style:{borderBottom:"2px solid "+T.bd}},
+      cols.map(function(c,i){return h("th",{key:i,style:{textAlign:"left",padding:"6px 8px",color:T.td,fontSize:10,fontWeight:600,textTransform:"uppercase",position:"sticky",top:0,background:T.cd}},c)})));
+  }
+  // Drill-down panel
+  function DrillPanel(){
+    if(!dd&&!sr)return null;
+    return h(Cd,{s:{marginBottom:16,border:"1px solid "+T.ac+"33"}},
+      h("div",{style:{display:"flex",justifyContent:"space-between",marginBottom:12}},
+        h("div",null,h("span",{style:{fontSize:13,fontWeight:700,color:T.tx}},dd?dd.v:"\""+sr+"\""),h("span",{style:{fontSize:12,color:T.tm,marginLeft:8}},fl.length+" apps")),
+        h("button",{onClick:function(){sD(null);sR("")},style:{background:T.sf,border:"1px solid "+T.bd,borderRadius:6,color:T.tx,padding:"4px 12px",cursor:"pointer",fontSize:11}},"✕ Clear")),
+      h("div",{style:{maxHeight:350,overflow:"auto"}},
+        h("table",{style:{width:"100%",borderCollapse:"collapse",fontSize:11}},
+          TblH(["App","Category","Target","Wave","VMs","Savings","Rationale",""]),
+          h("tbody",null,fl.slice(0,50).map(function(a){return AppRow(a)})))));
+  }
+
+  // === RENDER ===
+  return h("div",{style:{background:T.bg,color:T.tx,minHeight:"100vh"}},
+    // Header
+    h("div",{style:{background:T.sf,borderBottom:"1px solid "+T.bd,padding:"12px 24px",display:"flex",justifyContent:"space-between",alignItems:"center"}},
+      h("div",{style:{display:"flex",alignItems:"center",gap:12}},
+        h("div",{style:{width:32,height:32,borderRadius:6,background:"linear-gradient(135deg,"+T.ac+","+T.pu+")",display:"flex",alignItems:"center",justifyContent:"center",fontSize:16}},"⚕"),
+        h("div",null,
+          h("div",{style:{fontSize:15,fontWeight:800}},"MyOrg OCI Migration"),
+          h("div",{style:{fontSize:10,color:T.td}},"App Rationalization & Cloud Strategy — Live from ADB"))),
+      h("div",{style:{display:"flex",gap:6}},
+        ag.oc>0&&h(Pill,{color:T.am},"⚡ "+ag.oc+" overrides"),
+        h(Pill,{color:T.gn},raw.apps.length+" Apps"),
+        h(Pill,{color:T.ac},raw.vms.length+" VMs"),
+        h("button",{onClick:function(){props.onLogout()},style:{background:T.cd,border:"1px solid "+T.bd,borderRadius:6,color:T.td,padding:"4px 10px",cursor:"pointer",fontSize:11,marginLeft:8}},"Logout"))),
+    // Tab bar
+    h("div",{style:{background:T.sf,borderBottom:"1px solid "+T.bd,padding:"0 24px",display:"flex",gap:4}},
+      [["overview","📊 Overview"],["plan","🗺️ Migration Plan"],["cost","💰 Cost Analysis"],["apps","📋 Applications"],["infra","🖥️ Infrastructure"]].map(function(t){
+        return h("button",{key:t[0],onClick:function(){sT(t[0]);sD(null);sR("")},style:{background:"transparent",border:"none",borderBottom:"2px solid "+(tab===t[0]?T.ac:"transparent"),color:tab===t[0]?T.tx:T.td,padding:"12px 16px",cursor:"pointer",fontSize:12,fontWeight:600}},t[1])})),
+    // Content area
+    h("div",{style:{padding:20,maxWidth:1400,margin:"0 auto"}},
+
+      // === OVERVIEW TAB ===
+      tab==="overview"&&h("div",null,
+        h("div",{style:{display:"grid",gridTemplateColumns:"repeat(6,1fr)",gap:12,marginBottom:16}},
+          h(KpiCard,{label:"Total Apps",value:raw.apps.length,sub:"Cataloged",icon:"📦",color:T.ac,onClick:function(){sT("apps")}}),
+          h(KpiCard,{label:"OCI-Native",value:(ag.bt["OCI-Native"]||{a:0}).a,sub:(ag.bt["OCI-Native"]||{v:0}).v+" VMs",icon:"☁️",color:T.ac,onClick:function(){sD({t:"tgt",v:"OCI-Native"})},active:dd&&dd.v==="OCI-Native"}),
+          h(KpiCard,{label:"OCVS",value:(ag.bt["OCVS"]||{a:0}).a,sub:(ag.bt["OCVS"]||{v:0}).v+" VMs",icon:"🔄",color:T.pu,onClick:function(){sD({t:"tgt",v:"OCVS"})},active:dd&&dd.v==="OCVS"}),
+          h(KpiCard,{label:"On-Prem",value:(ag.bt["Stay-OnPrem"]||{a:0}).a,sub:(ag.bt["Stay-OnPrem"]||{v:0}).v+" VMs",icon:"🏢",color:T.am,onClick:function(){sD({t:"tgt",v:"Stay-OnPrem"})},active:dd&&dd.v==="Stay-OnPrem"}),
+          h(KpiCard,{label:"VMware Cost",value:"$2.29M/yr",sub:"Matilda TCO baseline",icon:"⚠️",color:T.rd,onClick:function(){sT("cost")}}),
+          h(KpiCard,{label:"Est. Savings",value:"$"+as+"K/yr",sub:"$"+Math.round(ag.ts/1000)+"K/mo",icon:"💰",color:T.gn,onClick:function(){sT("cost")}})),
+        // Override banner
+        ag.oc>0&&h("div",{style:{background:T.am+"12",border:"1px solid "+T.am+"33",borderRadius:8,padding:"10px 16px",marginBottom:16,display:"flex",justifyContent:"space-between",alignItems:"center"}},
+          h("span",{style:{fontSize:12,color:T.am}},"⚡ "+ag.oc+" override(s) active — all metrics recalculated"),
+          h("button",{onClick:clr,style:{background:T.cd,border:"1px solid "+T.am,borderRadius:6,color:T.am,padding:"4px 12px",cursor:"pointer",fontSize:11}},"Reset All")),
+        DrillPanel(),
+        // Charts row
+        h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:14,marginBottom:16}},
+          // Pie
+          h(Cd,null,h(Hdr,{sub:"Click slices to drill"},"Migration Targets"),
+            h(RContainer,{width:"100%",height:220},
+              h(PieChart,null,
+                h(Pie,{data:tD,dataKey:"value",cx:"50%",cy:"50%",innerRadius:50,outerRadius:85,onClick:function(d){sD({t:"tgt",v:d.name})},style:{cursor:"pointer"}},
+                  tD.map(function(e,i){return h(Cell,{key:i,fill:TC[e.name]||T.td,stroke:T.bg,strokeWidth:2})})),
+                h(RTooltip,{contentStyle:tts}))),
+            h("div",{style:{display:"flex",flexWrap:"wrap",gap:8,justifyContent:"center",marginTop:8}},
+              tD.map(function(d,i){return h("span",{key:i,onClick:function(){sD({t:"tgt",v:d.name})},style:{fontSize:10,color:T.tm,cursor:"pointer"}},
+                h("span",{style:{display:"inline-block",width:8,height:8,borderRadius:4,background:TC[d.name]||T.td,marginRight:4}}),d.name+" ("+d.value+")")}))),
+          // Categories
+          h(Cd,null,h(Hdr,{sub:"Click to filter"},"Category Breakdown"),
+            h("div",{style:{maxHeight:280,overflow:"auto"}},
+              Array.from(new Set(efWithSavings.map(function(a){return a.cat}))).sort().map(function(c,i){
+                var apps=efWithSavings.filter(function(a){return a.cat===c});
+                var cl2=apps.filter(function(a){return a.tgt==="OCI-Native"}).length;
+                var oc2=apps.filter(function(a){return a.tgt==="OCVS"}).length;
+                var op2=apps.filter(function(a){return a.tgt==="Stay-OnPrem"}).length;
+                return h("div",{key:i,onClick:function(){sD({t:"cat",v:c})},style:{display:"flex",alignItems:"center",padding:"5px 4px",cursor:"pointer",borderBottom:"1px solid "+T.bd+"08"},
+                  onMouseEnter:function(e){e.currentTarget.style.background=T.ch},onMouseLeave:function(e){e.currentTarget.style.background="transparent"}},
+                  h("span",{style:{fontSize:10,color:T.tm,width:110,flexShrink:0}},c),
+                  h("div",{style:{flex:1,display:"flex",height:14,borderRadius:3,overflow:"hidden",marginRight:8}},
+                    cl2>0&&h("div",{style:{width:(cl2/apps.length*100)+"%",background:T.ac,minWidth:2}}),
+                    oc2>0&&h("div",{style:{width:(oc2/apps.length*100)+"%",background:T.pu,minWidth:2}}),
+                    op2>0&&h("div",{style:{width:(op2/apps.length*100)+"%",background:T.am,minWidth:2}})),
+                  h("span",{style:{fontSize:10,color:T.tx,width:20,textAlign:"right"}},apps.length))}))),
+          // Waves
+          h(Cd,null,h(Hdr,{sub:"Click wave to see apps"},"Migration Waves"),
+            wvs.map(function(wv,i){
+              var wa=efWithSavings.filter(function(a){return a.w===wv.w});var wvVms=wa.reduce(function(s,a){return s+(a.vms||0)},0);var ws=wa.reduce(function(s,a){return s+(a.$s||0)},0);
+              return h("div",{key:i,onClick:function(){sD({t:"w",v:wv.w})},style:{padding:12,marginBottom:10,background:dd&&dd.v===wv.w?wv.c+"15":T.bg,borderRadius:8,border:"1px solid "+(dd&&dd.v===wv.w?wv.c+"44":T.bd),cursor:"pointer"},
+                onMouseEnter:function(e){e.currentTarget.style.borderColor=wv.c+"66"},onMouseLeave:function(e){e.currentTarget.style.borderColor=dd&&dd.v===wv.w?wv.c+"44":T.bd}},
+                h("div",{style:{display:"flex",justifyContent:"space-between",marginBottom:4}},
+                  h("span",{style:{fontSize:12,fontWeight:700,color:wv.c}},"Wave "+wv.w+": "+wv.l),h("span",{style:{fontSize:11,color:T.tm}},wv.t)),
+                h("div",{style:{fontSize:10,color:T.td,marginBottom:6}},wv.cr),
+                h("div",{style:{display:"flex",gap:12}},h("span",{style:{fontSize:11,color:T.tx}},wa.length+" apps"),h("span",{style:{fontSize:11,color:T.tx}},wvVms+" VMs"),h("span",{style:{fontSize:11,color:T.gn}},"$"+ws.toLocaleString()+"/mo")),
+                h(ProgBar,{p:wvVms/150*100,c:wv.c,h:4}))}))),
+        // Bottom: Broadcom + OS
+        h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}},
+          h(Cd,null,h(Hdr,{sub:"Socket utilization"},"Broadcom License Exposure"),
+            h("div",{style:{background:T.rd+"12",border:"1px solid "+T.rd+"33",borderRadius:8,padding:12,marginBottom:12}},
+              h("div",{style:{fontSize:11,color:T.rd,fontWeight:600}},"⚠️ ANNUAL ON-PREM COST (Matilda TCO)"),
+              h("div",{style:{fontSize:28,fontWeight:800,color:T.tx}},"$2.29M"),
+              h("div",{style:{fontSize:11,color:T.tm}},"Servers $2.29M + DB/Storage included • OCI Optimized: $899K (60.7% savings)")),
+            [["vSphere 6 Ent+",122,190,T.rd],["vSphere 7 Ent+",4,196,T.gn]].map(function(l,i){
+              return h("div",{key:i,style:{marginBottom:8}},
+                h("div",{style:{display:"flex",justifyContent:"space-between",fontSize:11,color:T.tm,marginBottom:4}},
+                  h("span",null,l[0]),h("span",{style:{color:T.tx}},l[1]+"/"+l[2]+" used")),
+                h(ProgBar,{p:l[1]/l[2]*100,c:l[3]}))})),
+          h(Cd,null,h(Hdr,{sub:"Guest OS versions"},"OS Distribution ("+raw.vms.length+" VMs)"),
+            h(RContainer,{width:"100%",height:240},
+              h(BarChart,{data:osData,layout:"vertical",margin:{left:90}},
+                h(XAxis,{type:"number",tick:{fill:T.td,fontSize:10}}),
+                h(YAxis,{dataKey:"n",type:"category",tick:{fill:T.tm,fontSize:10},width:90}),
+                h(RTooltip,{contentStyle:tts}),
+                h(Bar,{dataKey:"v",radius:[0,4,4,0]},
+                  osData.map(function(_,i){return h(Cell,{key:i,fill:i<2?T.ac:i<4?T.pu:T.td})}))))))
+      ),
+
+      // === MIGRATION PLAN TAB ===
+      tab==="plan"&&h("div",null,
+        h("div",{style:{display:"flex",gap:8,marginBottom:16}},
+          [["phases","📅 Phases"],["decisions","🎯 Decisions"],["whatif","⚡ What-If"]].map(function(t){
+            return h("button",{key:t[0],onClick:function(){sP(t[0])},style:{background:pv===t[0]?T.ac+"22":T.cd,border:"1px solid "+(pv===t[0]?T.ac+"55":T.bd),borderRadius:8,padding:"8px 16px",color:pv===t[0]?T.ac:T.tm,cursor:"pointer",fontSize:12,fontWeight:600}},t[1])})),
+        ag.oc>0&&h("div",{style:{background:T.am+"12",border:"1px solid "+T.am+"33",borderRadius:8,padding:"10px 16px",marginBottom:16,display:"flex",justifyContent:"space-between"}},
+          h("span",{style:{fontSize:12,color:T.am}},"⚡ "+ag.oc+" override(s) — projections updated"),
+          h("button",{onClick:clr,style:{background:T.cd,border:"1px solid "+T.am,borderRadius:6,color:T.am,padding:"4px 12px",cursor:"pointer",fontSize:11}},"Reset All")),
+        // Phases
+        pv==="phases"&&wvs.map(function(wv,i){
+          var wa=efWithSavings.filter(function(a){return a.w===wv.w});var wvVms=wa.reduce(function(s,a){return s+(a.vms||0)},0);var ws=wa.reduce(function(s,a){return s+(a.$s||0)},0);
+          return h(Cd,{key:i,s:{marginBottom:14,border:"1px solid "+wv.c+"22"}},
+            h("div",{style:{display:"flex",justifyContent:"space-between",marginBottom:12}},
+              h("div",null,h("div",{style:{fontSize:16,fontWeight:800,color:wv.c}},"Phase "+wv.w+": "+wv.l),h("div",{style:{fontSize:12,color:T.tm}},wv.t)),
+              h("div",{style:{display:"flex",gap:16,textAlign:"right"}},
+                h("div",null,h("div",{style:{fontSize:20,fontWeight:700,color:T.tx}},wa.length),h("div",{style:{fontSize:10,color:T.td}},"Apps")),
+                h("div",null,h("div",{style:{fontSize:20,fontWeight:700,color:T.ac}},wvVms),h("div",{style:{fontSize:10,color:T.td}},"VMs")),
+                h("div",null,h("div",{style:{fontSize:20,fontWeight:700,color:T.gn}},"$"+ws.toLocaleString()),h("div",{style:{fontSize:10,color:T.td}},"Savings/mo")))),
+            h("div",{style:{fontSize:12,color:T.tm,marginBottom:8}},wv.g),
+            h("div",{style:{maxHeight:200,overflow:"auto"}},
+              h("table",{style:{width:"100%",borderCollapse:"collapse",fontSize:11}},
+                TblH(["App","Category","Target","Wave","VMs","Savings","Rationale",""]),
+                h("tbody",null,wa.map(function(a){return AppRow(a)})))))}),
+        // Decisions
+        pv==="decisions"&&h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}},
+          h(Cd,null,h(Hdr,{sub:"How we decide where each app goes"},"Decision Framework"),
+            [["Device-connected (PACS, pumps, lab)?","Stay On-Prem",T.am],["Sub-10ms latency for patient safety?","Stay On-Prem",T.am],["VMware-dependent, no native alternative?","OCVS",T.pu],["Web-based with standard DB?","OCI-Native",T.ac],["Vendor supports cloud / SaaS available?","OCI-Native or SaaS",T.ac]].map(function(d,i){
+              return h("div",{key:i,style:{padding:12,marginBottom:8,background:T.bg,borderRadius:8,borderLeft:"3px solid "+d[2]}},
+                h("div",{style:{fontSize:12,color:T.tx,fontWeight:500,marginBottom:4}},(i+1)+". "+d[0]),
+                h("div",{style:{fontSize:11,color:d[2]}},"YES → "+d[1]))})),
+          h(Cd,null,h(Hdr,{sub:"Why these stay on-prem"},"On-Premises Justifications"),
+            h("div",{style:{maxHeight:400,overflow:"auto"}},
+              efWithSavings.filter(function(a){return a.tgt==="Stay-OnPrem"}).map(function(a){
+                return h("div",{key:a.id,onClick:function(){sS(a)},style:{padding:8,marginBottom:6,background:T.bg,borderRadius:6,cursor:"pointer",borderLeft:"3px solid "+T.am},
+                  onMouseEnter:function(e){e.currentTarget.style.background=T.ch},onMouseLeave:function(e){e.currentTarget.style.background=T.bg}},
+                  h("div",{style:{fontSize:12,color:T.tx,fontWeight:600}},a.n),
+                  h("div",{style:{fontSize:10,color:T.td,marginTop:2}},a.nt))})))),
+        // WHAT-IF with live $$ updates
+        pv==="whatif"&&h("div",null,
+          h(Cd,{s:{marginBottom:14}},
+            h(Hdr,{sub:"Click scenario — watch projections change instantly"},"⚡ What-If Scenario Builder"),
+            h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12,marginBottom:16}},
+              [["All OCVS → On-Prem","Conservative: keep VMware on-prem",T.am,function(){var o={};efWithSavings.filter(function(a){return a.tgt==="OCVS"}).forEach(function(a){o[a.id]={tgt:"Stay-OnPrem",nt:"What-if: conservative"}});sO(function(p){return Object.assign({},p,o)})}],
+               ["All OCVS → OCI-Native","Aggressive: full cloud, drop VMware",T.ac,function(){var o={};efWithSavings.filter(function(a){return a.tgt==="OCVS"}).forEach(function(a){o[a.id]={tgt:"OCI-Native",nt:"What-if: aggressive cloud"}});sO(function(p){return Object.assign({},p,o)})}],
+               ["Reset to AI Rec","Clear all overrides",T.td,clr]].map(function(s,i){
+                return h("div",{key:i,onClick:s[3],style:{padding:14,background:T.bg,borderRadius:8,border:"1px solid "+s[2]+"33",cursor:"pointer"},
+                  onMouseEnter:function(e){e.currentTarget.style.borderColor=s[2]},onMouseLeave:function(e){e.currentTarget.style.borderColor=s[2]+"33"}},
+                  h("div",{style:{fontSize:12,fontWeight:700,color:s[2]}},s[0]),
+                  h("div",{style:{fontSize:10,color:T.td,marginTop:4}},s[1]))})),
+            // LIVE PROJECTION — updates when overrides change
+            h("div",{style:{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:12}},
+              [["Annual Savings","$"+as+"K",T.gn],["Monthly Save","$"+Math.round(ag.ts/1000)+"K",T.gn],["VMs to OCI",(ag.bt["OCI-Native"]||{v:0}).v,T.ac],["VMs to OCVS",(ag.bt["OCVS"]||{v:0}).v,T.pu],["VMs On-Prem",(ag.bt["Stay-OnPrem"]||{v:0}).v,T.am]].map(function(m,i){
+                return h("div",{key:i,style:{textAlign:"center",padding:12,background:m[2]+"12",borderRadius:8,border:"1px solid "+m[2]+"22"}},
+                  h("div",{style:{fontSize:24,fontWeight:800,color:m[2]}},m[1]),
+                  h("div",{style:{fontSize:10,color:T.td}},m[0]))}))),
+          h(Cd,null,h(Hdr,{sub:"Click any row to override"},"All Planned Apps"),
+            h("input",{value:sr,onChange:function(e){sR(e.target.value)},placeholder:"🔍 Search...",style:{width:"100%",background:T.bg,color:T.tx,border:"1px solid "+T.bd,borderRadius:6,padding:"8px 12px",fontSize:12,marginBottom:12,outline:"none"}}),
+            h("div",{style:{maxHeight:400,overflow:"auto"}},
+              h("table",{style:{width:"100%",borderCollapse:"collapse",fontSize:11}},
+                TblH(["App","Category","Target","Wave","VMs","Savings","Rationale",""]),
+                h("tbody",null,fl.filter(function(a){return a.vms>0}).map(function(a){return AppRow(a)}))))))),
+
+      // === COST ANALYSIS TAB with OCVS option ===
+      tab==="cost"&&h("div",null,
+        h("div",{style:{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:12,marginBottom:16}},
+          h(KpiCard,{label:"Current Monthly",value:"$"+Math.round(ag.tc/1000)+"K",sub:"On-prem + VMware",icon:"💸",color:T.rd}),
+          h(KpiCard,{label:"Projected OCI",value:"$"+Math.round(ag.to/1000)+"K",sub:"After migration",icon:"☁️",color:T.ac}),
+          h(KpiCard,{label:"Monthly Savings",value:"$"+Math.round(ag.ts/1000)+"K",sub:Math.round(ag.ts/Math.max(ag.tc,1)*100)+"% reduction",icon:"📉",color:T.gn}),
+          h(KpiCard,{label:"Annual Savings",value:"$"+as+"K",sub:"Projected yearly",icon:"💰",color:T.gn}),
+          h(KpiCard,{label:"Broadcom/On-Prem",value:"$2.29M",sub:"Matilda baseline",icon:"🛡️",color:T.am})),
+        h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:16}},
+          // Cost timeline
+          h(Cd,null,h(Hdr,{sub:"Cumulative savings by wave"},"Cost Reduction Timeline"),
+            (function(){
+              var w1s=efWithSavings.filter(function(a){return a.w===1}).reduce(function(s,a){return s+(a.$s||0)},0);
+              var w2s=efWithSavings.filter(function(a){return a.w&&a.w<=2}).reduce(function(s,a){return s+(a.$s||0)},0);
+              var w3s=ag.ts;
+              var cd2=[{n:"Current",c:ag.tc,o:ag.tc,s:0},{n:"After W1",c:ag.tc,o:ag.tc-w1s,s:w1s},{n:"After W2",c:ag.tc,o:ag.tc-w2s,s:w2s},{n:"After W3",c:ag.tc,o:ag.tc-w3s,s:w3s}];
+              return h(RContainer,{width:"100%",height:250},
+                h(LineChart,{data:cd2},
+                  h(CartesianGrid,{strokeDasharray:"3 3",stroke:T.bd}),
+                  h(XAxis,{dataKey:"n",tick:{fill:T.tm,fontSize:11}}),
+                  h(YAxis,{tick:{fill:T.td,fontSize:10},tickFormatter:function(v){return"$"+Math.round(v/1000)+"K"}}),
+                  h(RTooltip,{contentStyle:tts,formatter:function(v){return["$"+Math.round(v).toLocaleString()+"/mo"]}}),
+                  h(Legend,{wrapperStyle:{fontSize:11}}),
+                  h(Line,{type:"monotone",dataKey:"c",stroke:T.rd,strokeWidth:2,name:"Current",dot:false}),
+                  h(Line,{type:"monotone",dataKey:"o",stroke:T.ac,strokeWidth:2,name:"Projected"}),
+                  h(Line,{type:"monotone",dataKey:"s",stroke:T.gn,strokeWidth:2,name:"Savings",strokeDasharray:"5 5"})))})()),
+          // Savings by target (includes OCVS bar)
+          h(Cd,null,h(Hdr,{sub:"Monthly savings per target"},"Savings by Target"),
+            h(RContainer,{width:"100%",height:250},
+              h(BarChart,{data:Object.entries(ag.bt).filter(function(e){return e[1].s!==0}).map(function(e){return{name:e[0],savings:e[1].s}}).sort(function(a,b){return b.savings-a.savings})},
+                h(XAxis,{dataKey:"name",tick:{fill:T.tm,fontSize:11}}),
+                h(YAxis,{tick:{fill:T.td,fontSize:10},tickFormatter:function(v){return"$"+Math.round(v/1000)+"K"}}),
+                h(RTooltip,{contentStyle:tts,formatter:function(v){return["$"+v.toLocaleString()+"/mo"]}}),
+                h(Bar,{dataKey:"savings",radius:[4,4,0,0]},
+                  Object.entries(ag.bt).filter(function(e){return e[1].s!==0}).map(function(e,i){return h(Cell,{key:i,fill:TC[e[0]]||T.td})})))))),
+        // Top savers with OCI-Native vs OCVS columns
+        h(Cd,null,h(Hdr,{sub:"Compare OCI-Native vs OCVS cost for each app"},"Top 15 Savings Opportunities"),
+          h("div",{style:{maxHeight:400,overflow:"auto"}},
+            h("table",{style:{width:"100%",borderCollapse:"collapse",fontSize:11}},
+              TblH(["#","App","Target","VMs","Current/mo","OCI-Native/mo","OCVS/mo","Saving/mo","Annual",""]),
+              h("tbody",null,
+                efWithSavings.filter(function(a){return a.$s>0}).sort(function(a,b){return b.$s-a.$s}).slice(0,15).map(function(a,i){
+                  return h("tr",{key:a.id,onClick:function(){sS(a)},style:{cursor:"pointer",borderBottom:"1px solid "+T.bd+"08"},
+                    onMouseEnter:function(e){e.currentTarget.style.background=T.ch},onMouseLeave:function(e){e.currentTarget.style.background="transparent"}},
+                    h("td",{style:{padding:"8px",color:T.td}},i+1),
+                    h("td",{style:{padding:"8px",color:T.tx,fontWeight:600}},a.n),
+                    h("td",{style:{padding:"8px"}},h(Pill,{color:TC[a.tgt]||T.td},a.tgt)),
+                    h("td",{style:{padding:"8px",color:T.tm}},a.vms),
+                    h("td",{style:{padding:"8px",color:T.rd,textAlign:"right"}},"$"+a.$c.toLocaleString()),
+                    h("td",{style:{padding:"8px",color:T.ac,textAlign:"right"}},"$"+a.$on.toLocaleString()),
+                    h("td",{style:{padding:"8px",color:T.pu,textAlign:"right"}},"$"+a.$ov.toLocaleString()),
+                    h("td",{style:{padding:"8px",color:T.gn,textAlign:"right",fontWeight:700}},"$"+a.$s.toLocaleString()),
+                    h("td",{style:{padding:"8px",color:T.gn,textAlign:"right"}},"$"+(a.$s*12).toLocaleString()),
+                    h("td",{style:{padding:"8px",color:T.ac}},"▸"))})))))),
+
+      // === APPLICATIONS TAB ===
+      tab==="apps"&&h("div",null,
+        h(Cd,{s:{marginBottom:14}},
+          h("div",{style:{display:"flex",gap:12,alignItems:"center"}},
+            h("input",{value:sr,onChange:function(e){sR(e.target.value)},placeholder:"🔍 Search apps, vendors, categories...",style:{flex:1,background:T.bg,color:T.tx,border:"1px solid "+T.bd,borderRadius:6,padding:"8px 12px",fontSize:12,outline:"none"}}),
+            h("span",{style:{fontSize:11,color:T.tm}},fl.length+" apps"))),
+        h(Cd,null,h("div",{style:{maxHeight:600,overflow:"auto"}},
+          h("table",{style:{width:"100%",borderCollapse:"collapse",fontSize:11}},
+            TblH(["App","Category","Target","Wave","VMs","Savings","Rationale",""]),
+            h("tbody",null,fl.map(function(a){
+              return h("tr",{key:a.id,onClick:function(){sS(a)},style:{cursor:"pointer",borderBottom:"1px solid "+T.bd+"08",background:a.ov?T.am+"08":"transparent"},
+                onMouseEnter:function(e){e.currentTarget.style.background=T.ch},onMouseLeave:function(e){e.currentTarget.style.background=a.ov?T.am+"08":"transparent"}},
+                h("td",{style:{padding:"8px",color:T.tx,fontWeight:500}},a.n,a.ov?" ⚡":""),
+                h("td",{style:{padding:"8px",color:T.tm,fontSize:10}},a.cat),
+                h("td",{style:{padding:"8px"}},h(Pill,{color:TC[a.tgt]||T.td},a.tgt||"—")),
+                h("td",{style:{padding:"8px",color:WC[a.w]||T.td,fontWeight:600}},a.w?"W"+a.w:"—"),
+                h("td",{style:{padding:"8px",color:T.tm}},a.vms||"—"),
+                h("td",{style:{padding:"8px",color:a.$s>0?T.gn:T.td}},a.$s>0?"$"+a.$s.toLocaleString():"—"),
+                h("td",{style:{padding:"8px",color:T.td,maxWidth:180,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",fontSize:10}},a.nt),
+                h("td",{style:{padding:"8px",color:T.ac}},"▸"))})))))),
+
+      // === INFRASTRUCTURE TAB ===
+      tab==="infra"&&h("div",null,
+        h("div",{style:{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:12,marginBottom:16}},
+          h(KpiCard,{label:"Total VMs",value:raw.vms.length,sub:"Click to view all",icon:"🖥️",color:T.ac,onClick:function(){sVM(true)}}),
+          h(KpiCard,{label:"ESXi Hosts",value:Array.from(new Set(raw.vms.map(function(v){return v.HOST_NAME}).filter(Boolean))).length,icon:"📡",color:T.pu}),
+          h(KpiCard,{label:"CPU Sockets",value:"126",icon:"⚡",color:T.am}),
+          h(KpiCard,{label:"Clusters",value:clusterData.length,icon:"🏗️",color:T.cy}),
+          h(KpiCard,{label:"Tagged VMs",value:raw.vms.filter(function(v){return v.APPLICATION}).length,sub:raw.vms.filter(function(v){return!v.APPLICATION}).length+" untagged",icon:"🏷️",color:T.gn,onClick:function(){sVM(true)}})),
+        h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}},
+          h(Cd,null,h(Hdr,{sub:"Click a cluster to view its VMs"},"Cluster Breakdown"),
+            h(RContainer,{width:"100%",height:300},
+              h(BarChart,{data:clusterData,layout:"vertical",margin:{left:130}},
+                h(XAxis,{type:"number",tick:{fill:T.td,fontSize:10}}),
+                h(YAxis,{dataKey:"n",type:"category",tick:{fill:T.tm,fontSize:10},width:130}),
+                h(RTooltip,{contentStyle:tts}),
+                h(Bar,{dataKey:"v",radius:[0,4,4,0]},
+                  clusterData.map(function(c,i){return h(Cell,{key:i,fill:c.n.indexOf("DEV")>=0?T.gn:c.n.indexOf("GEPACS")>=0?T.rd:c.n.indexOf("DMZ")>=0?T.am:T.ac})}))))),
+          h(Cd,null,h(Hdr,{sub:"Guest OS across "+raw.vms.length+" VMs"},"Operating System Distribution"),
+            h(RContainer,{width:"100%",height:300},
+              h(BarChart,{data:osData,layout:"vertical",margin:{left:90}},
+                h(XAxis,{type:"number",tick:{fill:T.td,fontSize:10}}),
+                h(YAxis,{dataKey:"n",type:"category",tick:{fill:T.tm,fontSize:10},width:90}),
+                h(RTooltip,{contentStyle:tts}),
+                h(Bar,{dataKey:"v",radius:[0,4,4,0]},
+                  osData.map(function(_,i){return h(Cell,{key:i,fill:i<2?T.ac:i<4?T.pu:T.td})})))))),
+        // Datacenter breakdown
+        h(Cd,{s:{marginTop:14}},h(Hdr,{sub:"VMs per datacenter"},"Datacenters"),
+          h("div",{style:{display:"flex",gap:12,flexWrap:"wrap"}},
+            (function(){var dc={};raw.vms.forEach(function(v){var d=v.DATACENTER||"Unknown";if(!dc[d])dc[d]=0;dc[d]++});
+              return Object.entries(dc).sort(function(a,b){return b[1]-a[1]}).map(function(e,i){
+                return h("div",{key:i,style:{textAlign:"center",padding:"12px 20px",background:T.bg,borderRadius:8,border:"1px solid "+T.bd,minWidth:120}},
+                  h("div",{style:{fontSize:22,fontWeight:800,color:T.ac}},e[1]),
+                  h("div",{style:{fontSize:11,color:T.tm}},e[0]))})})()))),
+
+    // Modals / Drawers
+    sel&&h(AppDrawer,{app:sel,ov:ov,oF:oF,allVMs:raw.vms,onClose:function(){sS(null)}}),
+    showVM&&h(VmModal,{vms:raw.vms,title:"All VMs ("+raw.vms.length+")",onClose:function(){sVM(false)}}))
+  );
+}
+
+// === CHAT PANEL — Grok 4 powered agentic chat ===
+function ChatPanel(props){
+  var _m=useState([{role:"assistant",content:"👋 I'm your MyOrg Migration Analyst, powered by **Grok 4** via OCI GenAI.\n\nI can query your real migration data — 806 VMs, 455 apps, 147 migration plans — live from ADB.\n\nTry: *\"Which apps save the most if moved to OCI?\"* or *\"Show me all Windows 2008 VMs\"*"}]),msgs=_m[0],sM=_m[1];
+  var _i=useState(""),inp=_i[0],sI=_i[1];
+  var _l=useState(false),loading=_l[0],sL=_l[1];
+  var scrollRef=React.useRef(null);
+
+  useEffect(function(){if(scrollRef.current)scrollRef.current.scrollTop=scrollRef.current.scrollHeight},[msgs]);
+
+  function send(){
+    if(!inp.trim()||loading)return;
+    var userMsg={role:"user",content:inp.trim()};
+    var newMsgs=msgs.concat([userMsg]);
+    sM(newMsgs);sI("");sL(true);
+
+    // Build messages for API (skip the initial welcome)
+    var apiMsgs=newMsgs.filter(function(m,i){return i>0}).map(function(m){return{role:m.role,content:m.content}});
+
+    fetch("/chat",{
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({messages:apiMsgs})
+    }).then(function(r){
+      if(!r.ok)throw new Error("API error "+r.status);
+      return r.json();
+    }).then(function(data){
+      var reply=data.reply||"No response";
+      // Add SQL badge if query was executed
+      if(data.sql_executed){
+        reply="🔍 *Queried ADB:* `"+data.sql_executed.substring(0,80)+(data.sql_executed.length>80?"...":"")+"`\n\n"+reply;
+      }
+      if(data.sql_results&&data.sql_results.length>0&&data.sql_results.length<=10){
+        // Build a mini table for small result sets
+        var keys=Object.keys(data.sql_results[0]);
+        var tbl="\n\n| "+keys.join(" | ")+" |\n|"+keys.map(function(){return"---"}).join("|")+"|\n";
+        data.sql_results.forEach(function(r){
+          tbl+="| "+keys.map(function(k){var v=r[k];return v===null?"—":typeof v==="number"?v.toLocaleString():String(v).substring(0,40)}).join(" | ")+" |\n";
+        });
+        reply+=tbl;
+      }
+      sM(function(p){return p.concat([{role:"assistant",content:reply}])});
+    }).catch(function(e){
+      sM(function(p){return p.concat([{role:"assistant",content:"❌ Error: "+e.message+"\n\nThe chat API may be loading. Try again in a moment."}])});
+    }).finally(function(){sL(false)});
+  }
+
+  // Simple markdown-ish rendering
+  function renderMd(text){
+    if(!text)return "";
+    // Split by lines, handle bold, italic, code, tables
+    var lines=text.split("\n");
+    var elements=[];
+    var inTable=false;var tableRows=[];
+    lines.forEach(function(line,i){
+      if(line.match(/^\|.*\|$/)){
+        if(line.match(/^\|[\s\-|]+\|$/))return; // skip separator
+        var cells=line.split("|").filter(function(c){return c.trim()!=""}).map(function(c){return c.trim()});
+        tableRows.push(cells);
+        inTable=true;return;
+      }
+      if(inTable&&tableRows.length>0){
+        elements.push(h("div",{key:"tbl-"+i,style:{overflowX:"auto",marginTop:8,marginBottom:8}},
+          h("table",{style:{borderCollapse:"collapse",fontSize:10,width:"100%"}},
+            h("thead",null,h("tr",null,tableRows[0].map(function(c,j){
+              return h("th",{key:j,style:{padding:"4px 6px",borderBottom:"1px solid "+T.bd,color:T.td,textAlign:"left",fontSize:9}},c)}))),
+            h("tbody",null,tableRows.slice(1).map(function(row,ri){
+              return h("tr",{key:ri},row.map(function(c,ci){
+                return h("td",{key:ci,style:{padding:"3px 6px",borderBottom:"1px solid "+T.bd+"08",color:T.tm,fontSize:10}},c)}))})))));
+        tableRows=[];inTable=false;
+      }
+      if(line.trim()==="")return elements.push(h("br",{key:"br-"+i}));
+      // Process inline formatting
+      var processed=line;
+      // Convert **bold**
+      var parts=[];var last=0;
+      var boldRe=/\*\*(.*?)\*\*/g;var match;
+      while((match=boldRe.exec(processed))!==null){
+        if(match.index>last)parts.push(processed.substring(last,match.index));
+        parts.push(h("strong",{key:"b-"+i+"-"+match.index,style:{color:T.tx,fontWeight:700}},match[1]));
+        last=boldRe.lastIndex;
+      }
+      if(last<processed.length)parts.push(processed.substring(last));
+      if(parts.length===0)parts=[processed];
+      // Wrap in div, handle *italic* and `code`
+      elements.push(h("div",{key:"l-"+i,style:{marginBottom:2}},parts));
+    });
+    // Flush remaining table
+    if(tableRows.length>0){
+      elements.push(h("div",{key:"tbl-end",style:{overflowX:"auto",marginTop:8}},
+        h("table",{style:{borderCollapse:"collapse",fontSize:10,width:"100%"}},
+          h("thead",null,h("tr",null,tableRows[0].map(function(c,j){
+            return h("th",{key:j,style:{padding:"4px 6px",borderBottom:"1px solid "+T.bd,color:T.td,textAlign:"left",fontSize:9}},c)}))),
+          h("tbody",null,tableRows.slice(1).map(function(row,ri){
+            return h("tr",{key:ri},row.map(function(c,ci){
+              return h("td",{key:ci,style:{padding:"3px 6px",borderBottom:"1px solid "+T.bd+"08",color:T.tm,fontSize:10}},c)}))})))));
+    }
+    return elements;
+  }
+
+  if(!props.open)return null;
+  return h("div",{style:{position:"fixed",bottom:80,right:20,width:420,height:560,background:T.sf,border:"1px solid "+T.bd,borderRadius:14,display:"flex",flexDirection:"column",zIndex:3000,boxShadow:"0 8px 40px rgba(0,0,0,.6)",overflow:"hidden"}},
+    // Header
+    h("div",{style:{padding:"12px 16px",borderBottom:"1px solid "+T.bd,display:"flex",justifyContent:"space-between",alignItems:"center",background:T.cd,flexShrink:0}},
+      h("div",{style:{display:"flex",alignItems:"center",gap:8}},
+        h("div",{style:{width:28,height:28,borderRadius:14,background:"linear-gradient(135deg,#FF6B35,"+T.pu+")",display:"flex",alignItems:"center",justifyContent:"center",fontSize:14}},"🤖"),
+        h("div",null,
+          h("div",{style:{fontSize:13,fontWeight:700,color:T.tx}},"Migration Analyst"),
+          h("div",{style:{fontSize:9,color:T.td}},"Grok 4 · OCI GenAI · Live ADB"))),
+      h("button",{onClick:props.onClose,style:{background:"transparent",border:"none",color:T.td,fontSize:18,cursor:"pointer",padding:4}},"✕")),
+    // Messages
+    h("div",{ref:scrollRef,style:{flex:1,overflow:"auto",padding:12,display:"flex",flexDirection:"column",gap:8}},
+      msgs.map(function(m,i){
+        var isUser=m.role==="user";
+        return h("div",{key:i,style:{display:"flex",justifyContent:isUser?"flex-end":"flex-start"}},
+          h("div",{style:{maxWidth:"85%",padding:"10px 14px",borderRadius:isUser?"14px 14px 4px 14px":"14px 14px 14px 4px",background:isUser?T.ac+"22":T.cd,border:"1px solid "+(isUser?T.ac+"33":T.bd),fontSize:12,color:isUser?T.tx:T.tm,lineHeight:1.5}},
+            renderMd(m.content)));
+      }),
+      loading&&h("div",{style:{display:"flex",gap:4,padding:8}},
+        [0,1,2].map(function(i){return h("div",{key:i,style:{width:8,height:8,borderRadius:4,background:T.ac,opacity:.4,animation:"pulse 1.2s ease-in-out "+(i*0.15)+"s infinite"}})}))),
+    // Input
+    h("div",{style:{padding:12,borderTop:"1px solid "+T.bd,display:"flex",gap:8,flexShrink:0}},
+      h("input",{value:inp,onChange:function(e){sI(e.target.value)},onKeyDown:function(e){if(e.key==="Enter"&&!e.shiftKey)send()},placeholder:loading?"Grok is thinking...":"Ask about your migration...",disabled:loading,style:{flex:1,background:T.bg,color:T.tx,border:"1px solid "+T.bd,borderRadius:10,padding:"10px 14px",fontSize:12,outline:"none"}}),
+      h("button",{onClick:send,disabled:loading||!inp.trim(),style:{background:loading?T.bd:T.ac,border:"none",borderRadius:10,color:"#fff",padding:"10px 16px",cursor:loading?"wait":"pointer",fontSize:12,fontWeight:700,opacity:loading||!inp.trim()?0.5:1}},loading?"···":"Send")));
+}
+
+// === APP ROOT with login gate + chat ===
+function App(){
+  var _a=useState(false),auth=_a[0],sA=_a[1];
+  var _c=useState(false),chatOpen=_c[0],sC=_c[1];
+  useEffect(function(){if(window.sessionStorage&&window.sessionStorage.getItem("mig_auth")==="1")sA(true)},[]);
+  function login(){if(window.sessionStorage)window.sessionStorage.setItem("mig_auth","1");sA(true)}
+  function logout(){if(window.sessionStorage)window.sessionStorage.removeItem("mig_auth");sA(false)}
+  if(!auth)return h(LoginScreen,{onLogin:login});
+  return h("div",null,
+    h(Dashboard,{onLogout:logout}),
+    h(ChatPanel,{open:chatOpen,onClose:function(){sC(false)}}),
+    // Floating chat button
+    !chatOpen&&h("button",{onClick:function(){sC(true)},style:{position:"fixed",bottom:20,right:20,width:56,height:56,borderRadius:28,background:"linear-gradient(135deg,#FF6B35,"+T.pu+")",border:"none",color:"#fff",fontSize:22,cursor:"pointer",boxShadow:"0 4px 20px rgba(167,139,250,.4)",zIndex:2500,display:"flex",alignItems:"center",justifyContent:"center",transition:"transform 0.2s"},
+      onMouseEnter:function(e){e.currentTarget.style.transform="scale(1.1)"},
+      onMouseLeave:function(e){e.currentTarget.style.transform="scale(1)"}},"🤖"));
+}
+
+ReactDOM.render(h(App),document.getElementById("root"));
+</script>
+</body>
+</html>
