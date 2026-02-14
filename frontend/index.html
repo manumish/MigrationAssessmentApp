@@ -240,16 +240,26 @@ function Dashboard(props){
   var _p=useState("phases"),pv=_p[0],sP=_p[1];
   var _vm=useState(false),showVM=_vm[0],sVM=_vm[1];
   var _ld=useState(true),loading=_ld[0],sLd=_ld[1];
-  var _raw=useState({vms:[],mp:[],apps:[]}),raw=_raw[0],sRaw=_raw[1];
+  var _raw=useState({vms:[],mp:[],apps:[],tags:{}}),raw=_raw[0],sRaw=_raw[1];
+  // Portal state
+  var _psel=useState({}),psel=_psel[0],sPsel=_psel[1]; // selected VM indices {idx:true}
+  var _pall=useState(false),pall=_pall[0],sPall=_pall[1]; // select-all toggle
+  var _pfilt=useState(""),pfilt=_pfilt[0],sPfilt=_pfilt[1]; // search filter
+  var _pcl=useState(""),pcl=_pcl[0],sPcl=_pcl[1]; // cluster filter
+  var _pstat=useState("all"),pstat=_pstat[0],sPstat=_pstat[1]; // tagged/untagged/all
+  var _ptag=useState({app:"",crit:"",env:"",tgt:"",wave:"",owner:"",cat:""}),ptag=_ptag[0],sPtag=_ptag[1]; // tag form
+  var _pmsg=useState(""),pmsg=_pmsg[0],sPmsg=_pmsg[1]; // success message
+  var _pbusy=useState(false),pbusy=_pbusy[0],sPbusy=_pbusy[1]; // saving indicator
 
   // Load data from API
   useEffect(function(){
     Promise.all([
       fetch("/data/inventory_vms.json").then(function(r){return r.json()}),
       fetch("/data/migration_plan.json").then(function(r){return r.json()}),
-      fetch("/data/app_inventory.json").then(function(r){return r.json()})
+      fetch("/data/app_inventory.json").then(function(r){return r.json()}),
+      fetch("/data/migration_tags.json").then(function(r){return r.json()}).catch(function(){return {}})
     ]).then(function(d){
-      sRaw({vms:d[0],mp:d[1],apps:d[2]});
+      sRaw({vms:d[0],mp:d[1],apps:d[2],tags:d[3]||{}});
       sLd(false);
     }).catch(function(e){console.error("Load error",e);sLd(false)});
   },[]);
@@ -385,7 +395,7 @@ function Dashboard(props){
         h("button",{onClick:function(){props.onLogout()},style:{background:T.cd,border:"1px solid "+T.bd,borderRadius:6,color:T.td,padding:"4px 10px",cursor:"pointer",fontSize:11,marginLeft:8}},"Logout"))),
     // Tab bar
     h("div",{style:{background:T.sf,borderBottom:"1px solid "+T.bd,padding:"0 24px",display:"flex",gap:4}},
-      [["overview","📊 Overview"],["plan","🗺️ Migration Plan"],["cost","💰 Cost Analysis"],["apps","📋 Applications"],["infra","🖥️ Infrastructure"]].map(function(t){
+      [["overview","📊 Overview"],["portal","🏷️ Tag Portal"],["plan","🗺️ Migration Plan"],["cost","💰 Cost Analysis"],["apps","📋 Applications"],["infra","🖥️ Infrastructure"]].map(function(t){
         return h("button",{key:t[0],onClick:function(){sT(t[0]);sD(null);sR("")},style:{background:"transparent",border:"none",borderBottom:"2px solid "+(tab===t[0]?T.ac:"transparent"),color:tab===t[0]?T.tx:T.td,padding:"12px 16px",cursor:"pointer",fontSize:12,fontWeight:600}},t[1])})),
     // Content area
     h("div",{style:{padding:20,maxWidth:1400,margin:"0 auto"}},
@@ -463,6 +473,181 @@ function Dashboard(props){
                 h(RTooltip,{contentStyle:tts}),
                 h(Bar,{dataKey:"v",radius:[0,4,4,0]},
                   osData.map(function(_,i){return h(Cell,{key:i,fill:i<2?T.ac:i<4?T.pu:T.td})}))))))
+      ),
+
+      // === TAG PORTAL TAB ===
+      tab==="portal"&&h("div",{style:{display:"grid",gridTemplateColumns:"1fr 340px",gap:16,minHeight:600}},
+        // LEFT: VM list with checkboxes
+        h("div",null,
+          // Header stats
+          h("div",{style:{display:"flex",gap:12,marginBottom:14,alignItems:"center",flexWrap:"wrap"}},
+            h("div",{style:{background:T.sf,border:"1px solid "+T.bd,borderRadius:8,padding:"8px 14px",display:"flex",alignItems:"center",gap:8}},
+              h("span",{style:{fontSize:20}},"\uD83C\uDFF7\uFE0F"),
+              h("span",{style:{fontWeight:700,color:T.tx}},"App Owner Tag Portal")),
+            h("div",{style:{background:T.gn+"18",border:"1px solid "+T.gn+"40",borderRadius:8,padding:"6px 12px",fontSize:12}},
+              h("span",{style:{color:T.gn,fontWeight:700}},raw.vms.filter(function(v){return v.APPLICATION&&v.APPLICATION!=="Unassigned"}).length),
+              h("span",{style:{color:T.tm}}," tagged")),
+            h("div",{style:{background:T.am+"18",border:"1px solid "+T.am+"40",borderRadius:8,padding:"6px 12px",fontSize:12}},
+              h("span",{style:{color:T.am,fontWeight:700}},raw.vms.filter(function(v){return!v.APPLICATION||v.APPLICATION==="Unassigned"}).length),
+              h("span",{style:{color:T.tm}}," untagged")),
+            Object.keys(psel).length>0&&h("div",{style:{background:T.ac+"18",border:"1px solid "+T.ac+"40",borderRadius:8,padding:"6px 12px",fontSize:12}},
+              h("span",{style:{color:T.ac,fontWeight:700}},Object.keys(psel).length),
+              h("span",{style:{color:T.tm}}," selected")),
+            pmsg&&h("div",{style:{background:T.gn+"20",border:"1px solid "+T.gn+"50",borderRadius:8,padding:"6px 14px",fontSize:12,color:T.gn,fontWeight:600}},"\u2705 "+pmsg)),
+          // Filters row
+          h("div",{style:{display:"flex",gap:8,marginBottom:10,flexWrap:"wrap"}},
+            h("input",{placeholder:"\uD83D\uDD0D Search VM name, IP, DNS...",value:pfilt,onChange:function(e){sPfilt(e.target.value);sPsel({});sPall(false)},
+              style:{flex:1,minWidth:180,padding:"8px 12px",background:T.bg,border:"1px solid "+T.bd,borderRadius:8,color:T.tx,fontSize:12,outline:"none"}}),
+            h("select",{value:pcl,onChange:function(e){sPcl(e.target.value);sPsel({});sPall(false)},
+              style:{padding:"8px 10px",background:T.bg,border:"1px solid "+T.bd,borderRadius:8,color:T.tx,fontSize:12}},
+              h("option",{value:""},"All Clusters"),
+              (raw.tags.clusters||[]).map(function(c){return h("option",{key:c,value:c},c)})),
+            h("select",{value:pstat,onChange:function(e){sPstat(e.target.value);sPsel({});sPall(false)},
+              style:{padding:"8px 10px",background:T.bg,border:"1px solid "+T.bd,borderRadius:8,color:T.tx,fontSize:12}},
+              h("option",{value:"all"},"All VMs"),
+              h("option",{value:"untagged"},"Untagged Only"),
+              h("option",{value:"tagged"},"Tagged Only"))),
+          // Filtered VMs
+          (function(){
+            var fv=raw.vms.filter(function(v,i){
+              v._idx=i;
+              if(pcl&&v.CLUSTER_NAME!==pcl)return false;
+              if(pstat==="untagged"&&v.APPLICATION&&v.APPLICATION!=="Unassigned")return false;
+              if(pstat==="tagged"&&(!v.APPLICATION||v.APPLICATION==="Unassigned"))return false;
+              if(pfilt){var q=pfilt.toLowerCase();if((v.VM_NAME||"").toLowerCase().indexOf(q)<0&&(v.PRIMARY_IP||"").indexOf(q)<0&&(v.DNS_NAME||"").toLowerCase().indexOf(q)<0&&(v.APPLICATION||"").toLowerCase().indexOf(q)<0&&(v.OS_CONFIG||"").toLowerCase().indexOf(q)<0)return false}
+              return true;
+            });
+            return h("div",null,
+              // Table header with select-all
+              h("div",{style:{display:"grid",gridTemplateColumns:"36px 1fr 120px 100px 130px 100px 90px 60px",gap:0,padding:"6px 8px",background:T.sf,borderRadius:"8px 8px 0 0",border:"1px solid "+T.bd,borderBottom:"none",fontSize:11,fontWeight:700,color:T.tm}},
+                h("div",null,h("input",{type:"checkbox",checked:pall,onChange:function(){
+                  if(pall){sPsel({});sPall(false)}else{var ns={};fv.forEach(function(v){ns[v._idx]=true});sPsel(ns);sPall(true)}
+                },style:{cursor:"pointer",width:16,height:16}})),
+                h("div",null,"VM Name"),h("div",null,"Cluster"),h("div",null,"IP"),h("div",null,"Application"),h("div",null,"OS"),h("div",null,"CPUs"),h("div",null,"Mem")),
+              // Scrollable VM rows
+              h("div",{style:{maxHeight:500,overflowY:"auto",border:"1px solid "+T.bd,borderRadius:"0 0 8px 8px"}},
+                fv.length===0?h("div",{style:{padding:40,textAlign:"center",color:T.td}},"No VMs match your filters"):
+                fv.map(function(v){
+                  var isTagged=v.APPLICATION&&v.APPLICATION!=="Unassigned";
+                  var isSel=!!psel[v._idx];
+                  return h("div",{key:v._idx,onClick:function(){var ns=Object.assign({},psel);if(ns[v._idx])delete ns[v._idx];else ns[v._idx]=true;sPsel(ns)},
+                    style:{display:"grid",gridTemplateColumns:"36px 1fr 120px 100px 130px 100px 90px 60px",gap:0,padding:"6px 8px",
+                      background:isSel?T.ac+"12":isTagged?T.gn+"06":"transparent",
+                      borderBottom:"1px solid "+T.bd+"60",cursor:"pointer",fontSize:11,alignItems:"center",
+                      transition:"background .15s"}},
+                    h("div",null,h("input",{type:"checkbox",checked:isSel,readOnly:true,style:{cursor:"pointer",width:16,height:16,accentColor:T.ac}})),
+                    h("div",{style:{color:T.tx,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},v.VM_NAME||"—"),
+                    h("div",{style:{color:T.td,fontSize:10}},v.CLUSTER_NAME||"—"),
+                    h("div",{style:{color:T.td,fontFamily:"monospace",fontSize:10}},v.PRIMARY_IP||"—"),
+                    h("div",{style:{color:isTagged?T.gn:T.am,fontWeight:isTagged?600:400,fontSize:10,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},
+                      isTagged?"\u2705 "+v.APPLICATION:"\u26A0\uFE0F Unassigned"),
+                    h("div",{style:{color:T.td,fontSize:10,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},v.OS_CONFIG?v.OS_CONFIG.replace(/Microsoft |VMware |CentOS |Red Hat Enterprise /g,"").substring(0,18):"—"),
+                    h("div",{style:{color:T.cy,fontFamily:"monospace",fontSize:11}},v.CPUS||"—"),
+                    h("div",{style:{color:T.cy,fontFamily:"monospace",fontSize:10}},v.MEMORY_MB?Math.round(parseInt(v.MEMORY_MB)/1024)+"G":"—"))
+                })),
+              h("div",{style:{padding:"8px 12px",background:T.sf,borderTop:"1px solid "+T.bd,fontSize:11,color:T.td,display:"flex",justifyContent:"space-between"}},
+                h("span",null,"Showing "+fv.length+" of "+raw.vms.length+" VMs"),
+                h("span",null,Object.keys(psel).length+" selected")))
+          })()),
+
+        // RIGHT: Tag panel
+        h("div",{style:{position:"sticky",top:20,alignSelf:"start"}},
+          h("div",{style:{background:T.sf,border:"1px solid "+T.bd,borderRadius:12,padding:20}},
+            h("div",{style:{fontSize:15,fontWeight:700,color:T.tx,marginBottom:4}},"\uD83C\uDFF7\uFE0F Apply Tags"),
+            h("div",{style:{fontSize:11,color:T.td,marginBottom:16}},
+              Object.keys(psel).length>0?"Apply to "+Object.keys(psel).length+" selected VM"+(Object.keys(psel).length>1?"s":""):"Select VMs on the left to apply tags"),
+            // Application
+            h("label",{style:{fontSize:11,color:T.tm,fontWeight:600,display:"block",marginBottom:4}},"Application"),
+            h("input",{list:"applist",placeholder:"Type or select app...",value:ptag.app,
+              onChange:function(e){sPtag(Object.assign({},ptag,{app:e.target.value}))},
+              style:{width:"100%",padding:"8px 10px",background:T.bg,border:"1px solid "+T.bd,borderRadius:8,color:T.tx,fontSize:12,marginBottom:12,outline:"none"}}),
+            h("datalist",{id:"applist"},(raw.tags.applications||[]).map(function(a){return h("option",{key:a,value:a})})),
+            // Category
+            h("label",{style:{fontSize:11,color:T.tm,fontWeight:600,display:"block",marginBottom:4}},"Category"),
+            h("select",{value:ptag.cat,onChange:function(e){sPtag(Object.assign({},ptag,{cat:e.target.value}))},
+              style:{width:"100%",padding:"8px 10px",background:T.bg,border:"1px solid "+T.bd,borderRadius:8,color:T.tx,fontSize:12,marginBottom:12}},
+              h("option",{value:""},"— select —"),
+              (raw.tags.categories||[]).map(function(c){return h("option",{key:c,value:c},c)})),
+            // Criticality
+            h("label",{style:{fontSize:11,color:T.tm,fontWeight:600,display:"block",marginBottom:4}},"Criticality"),
+            h("select",{value:ptag.crit,onChange:function(e){sPtag(Object.assign({},ptag,{crit:e.target.value}))},
+              style:{width:"100%",padding:"8px 10px",background:T.bg,border:"1px solid "+T.bd,borderRadius:8,color:T.tx,fontSize:12,marginBottom:12}},
+              h("option",{value:""},"— select —"),
+              (raw.tags.criticality||[]).map(function(c){return h("option",{key:c,value:c},c)})),
+            // Environment
+            h("label",{style:{fontSize:11,color:T.tm,fontWeight:600,display:"block",marginBottom:4}},"Environment"),
+            h("select",{value:ptag.env,onChange:function(e){sPtag(Object.assign({},ptag,{env:e.target.value}))},
+              style:{width:"100%",padding:"8px 10px",background:T.bg,border:"1px solid "+T.bd,borderRadius:8,color:T.tx,fontSize:12,marginBottom:12}},
+              h("option",{value:""},"— select —"),
+              (raw.tags.environments||[]).map(function(e){return h("option",{key:e,value:e},e)})),
+            // Migration Target
+            h("label",{style:{fontSize:11,color:T.tm,fontWeight:600,display:"block",marginBottom:4}},"Migration Target"),
+            h("select",{value:ptag.tgt,onChange:function(e){sPtag(Object.assign({},ptag,{tgt:e.target.value}))},
+              style:{width:"100%",padding:"8px 10px",background:T.bg,border:"1px solid "+T.bd,borderRadius:8,color:T.tx,fontSize:12,marginBottom:12}},
+              h("option",{value:""},"— select —"),
+              h("option",{value:"OCI-Native"},"\u2601\uFE0F OCI-Native"),
+              h("option",{value:"OCVS"},"\uD83D\uDD04 OCVS"),
+              h("option",{value:"Stay-OnPrem"},"\uD83C\uDFE2 Stay-OnPrem")),
+            // Wave
+            h("label",{style:{fontSize:11,color:T.tm,fontWeight:600,display:"block",marginBottom:4}},"Migration Wave"),
+            h("select",{value:ptag.wave,onChange:function(e){sPtag(Object.assign({},ptag,{wave:e.target.value}))},
+              style:{width:"100%",padding:"8px 10px",background:T.bg,border:"1px solid "+T.bd,borderRadius:8,color:T.tx,fontSize:12,marginBottom:12}},
+              h("option",{value:""},"— select —"),
+              h("option",{value:"1"},"Wave 1 (Q2-Q3 2026)"),
+              h("option",{value:"2"},"Wave 2 (Q4 2026)"),
+              h("option",{value:"3"},"Wave 3 (Q1 2027)")),
+            // Owner
+            h("label",{style:{fontSize:11,color:T.tm,fontWeight:600,display:"block",marginBottom:4}},"App Owner"),
+            h("input",{placeholder:"Your name / team",value:ptag.owner,
+              onChange:function(e){sPtag(Object.assign({},ptag,{owner:e.target.value}))},
+              style:{width:"100%",padding:"8px 10px",background:T.bg,border:"1px solid "+T.bd,borderRadius:8,color:T.tx,fontSize:12,marginBottom:16,outline:"none"}}),
+            // Apply button
+            h("button",{disabled:Object.keys(psel).length===0||pbusy||(!ptag.app&&!ptag.crit&&!ptag.env&&!ptag.tgt&&!ptag.wave&&!ptag.owner&&!ptag.cat),
+              onClick:function(){
+                sPbusy(true);sPmsg("");
+                var vmNames=Object.keys(psel).map(function(i){return raw.vms[parseInt(i)].VM_NAME});
+                var payload={vm_names:vmNames,tags:{}};
+                if(ptag.app)payload.tags.APPLICATION=ptag.app;
+                if(ptag.cat)payload.tags.APP_CATEGORY=ptag.cat;
+                if(ptag.crit)payload.tags.VM_CRITICALITY=ptag.crit;
+                if(ptag.env)payload.tags.VM_ENVIRONMENT=ptag.env;
+                if(ptag.tgt)payload.tags.MIGRATION_TARGET=ptag.tgt;
+                if(ptag.wave)payload.tags.MIGRATION_WAVE=parseInt(ptag.wave);
+                if(ptag.owner)payload.tags.APP_OWNER=ptag.owner;
+                fetch("/tag",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)})
+                  .then(function(r){return r.json()})
+                  .then(function(d){
+                    if(d.updated){
+                      // Update local state
+                      var nv=raw.vms.slice();
+                      Object.keys(psel).forEach(function(i){
+                        var idx=parseInt(i);
+                        Object.keys(payload.tags).forEach(function(k){nv[idx]=Object.assign({},nv[idx]);nv[idx][k]=String(payload.tags[k])});
+                      });
+                      sRaw(Object.assign({},raw,{vms:nv}));
+                      sPmsg("Tagged "+d.updated+" VMs");
+                      sPsel({});sPall(false);
+                      setTimeout(function(){sPmsg("")},4000);
+                    }else{sPmsg("Error: "+(d.error||"unknown"))}
+                    sPbusy(false);
+                  }).catch(function(e){sPmsg("Error: "+e.message);sPbusy(false)});
+              },
+              style:{width:"100%",padding:"10px",background:Object.keys(psel).length>0?T.ac:T.bd,border:"none",borderRadius:8,
+                color:"#fff",fontWeight:700,fontSize:13,cursor:Object.keys(psel).length>0?"pointer":"not-allowed",
+                opacity:Object.keys(psel).length>0?1:0.5,transition:"all .2s"}},
+              pbusy?"Saving...":"\uD83C\uDFF7\uFE0F Apply Tags to "+Object.keys(psel).length+" VM"+(Object.keys(psel).length!==1?"s":"")),
+            // Clear selection
+            Object.keys(psel).length>0&&h("button",{onClick:function(){sPsel({});sPall(false);sPtag({app:"",crit:"",env:"",tgt:"",wave:"",owner:"",cat:""})},
+              style:{width:"100%",padding:"8px",background:"transparent",border:"1px solid "+T.bd,borderRadius:8,color:T.td,fontSize:11,cursor:"pointer",marginTop:8}},"Clear Selection")),
+          // Current tags legend
+          h("div",{style:{background:T.sf,border:"1px solid "+T.bd,borderRadius:12,padding:16,marginTop:12}},
+            h("div",{style:{fontSize:12,fontWeight:700,color:T.tm,marginBottom:8}},"Quick Stats"),
+            h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,fontSize:11}},
+              (function(){var tc={};raw.vms.forEach(function(v){var t=v.MIGRATION_TARGET||"Unassigned";if(!tc[t])tc[t]=0;tc[t]++});
+                return Object.entries(tc).sort(function(a,b){return b[1]-a[1]}).map(function(e,i){
+                  var col=e[0]==="OCI-Native"?T.ac:e[0]==="OCVS"?T.pu:e[0]==="Stay-OnPrem"?T.am:T.td;
+                  return h("div",{key:i,style:{display:"flex",justifyContent:"space-between",padding:"4px 8px",background:col+"10",borderRadius:4}},
+                    h("span",{style:{color:col}},e[0]),h("span",{style:{color:T.tx,fontWeight:700}},e[1]))})})()))
       ),
 
       // === MIGRATION PLAN TAB ===
